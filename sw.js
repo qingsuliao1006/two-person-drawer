@@ -8,13 +8,15 @@
  * 策略分三档：
  *   1. 页面导航（HTML）  → 网络优先（带 no-cache 校验）。拿不到网才回缓存。
  *      iOS 独立模式自己不会问，那就由这里替它问。
- *   2. /assets/ /fonts/ /icons/ → 缓存优先。文件名带 hash 或几乎不变，命中是纯赚。
+ *   2. /assets/ /fonts/ → 缓存优先。文件名带 hash，内容改了名字就变，不会拿错。
+ *      **/icons/ 不能走缓存优先**：文件名是固定的（icon-512.png），换了图标
+ *      名字也不变，缓存优先会让桌面上的旧图标一直留着。它们很小，走网络优先。
  *   3. 其它同源 GET（manifest 等）→ 网络优先，失败回缓存。
  * 跨域请求（Supabase 接口、图片存储）一律不碰，不缓存、不拦截。
  *
  * 改了下面的策略就要改 VERSION，激活时会把旧缓存清掉。
  */
-const VERSION = 'v1'
+const VERSION = 'v2'
 const CACHE = `jinian-${VERSION}`
 const OFFLINE_URL = './index.html'
 
@@ -56,7 +58,7 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
-  if (/\/(assets|fonts|icons)\//.test(url.pathname)) {
+  if (/\/(assets|fonts)\//.test(url.pathname)) {
     event.respondWith(cacheFirst(request))
     return
   }
