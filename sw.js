@@ -16,7 +16,7 @@
  *
  * 改了下面的策略就要改 VERSION，激活时会把旧缓存清掉。
  */
-const VERSION = 'v12'
+const VERSION = 'v13'
 const CACHE = `jinian-${VERSION}`
 const OFFLINE_URL = './index.html'
 
