@@ -16,7 +16,7 @@
  *
  * 改了下面的策略就要改 VERSION，激活时会把旧缓存清掉。
  */
-const VERSION = 'v13'
+const VERSION = 'v14'
 const CACHE = `jinian-${VERSION}`
 const OFFLINE_URL = './index.html'
 
@@ -52,6 +52,13 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(request.url)
   if (url.origin !== self.location.origin) return
+
+  /* 手部模型和 wasm 运行库一律不管，直接放给浏览器。
+     原因是它们走的是 Range 分块下载（最多 16 路并发），而这里的网络优先
+     逻辑会对 206 响应调 cache.put —— 状态 206 是不允许进 Cache 的，
+     会在 SW 里抛一串没人接的异常，而且 16 个分块的 cache key 完全一样，
+     真存下去就是互相覆盖。这两类文件在 loader 里有自己的持久缓存，不劳 SW。 */
+  if (/\/(models|mediapipe)\//.test(url.pathname)) return
 
   if (request.mode === 'navigate') {
     event.respondWith(networkFirst(request))
