@@ -228,7 +228,7 @@
 
   <section class="card">
     <h2>三、手势模型</h2>
-    <p class="hint">需要先打开摄像头。首次要下约 11MB，慢的话等一会儿。</p>
+    <p class="hint">需要先打开摄像头。模型就在本站，首次约 17MB，之后走浏览器缓存。</p>
     <button id="modelBtn" disabled>加载模型并测帧率</button>
     <div class="rows" id="modelRows" style="margin-top: 8px"></div>
   </section>
@@ -274,6 +274,8 @@ function state(el, text) {
 const ua = navigator.userAgent;
 const envRows = $('envRows');
 
+let isDesktop = !/Android|iPad|iPhone|iPod|Mobile|Tablet/i.test(ua);
+
 function detectEnv() {
   const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   const isAndroid = /Android/i.test(ua);
@@ -287,7 +289,11 @@ function detectEnv() {
   let note = '权限由浏览器自己弹窗询问，最容易成功。';
   let level = 'ok';
 
-  if (isWebView) {
+  if (isDesktop) {
+    label = '电脑浏览器';
+    note = '最理想的环境：没有壳挡权限，性能和分辨率都是手机上没法比的。';
+    level = 'ok';
+  } else if (isWebView) {
     label = '安卓 WebView（套壳）';
     note = '权限要由壳的宿主程序授予。壳没实现这段，摄像头会直接失败且没有弹窗。';
     level = 'bad';
@@ -445,34 +451,44 @@ camBtn.addEventListener('click', async () => {
 /* ────────── 三、手势模型 ────────── */
 
 const modelRows = $('modelRows');
-const MODEL_URL =
-  'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
-const VISION_VER = '0.10.14';
+const MODEL_URL = './models/hand_landmarker.task';
+const WASM_DIR = './mediapipe/wasm';
+const BUNDLE_URL = './mediapipe/vision_bundle.mjs';
 
+/* 全部走同源。模型原本在 storage.googleapis.com，国内直连不通 —— 实测就卡死在
+   「正在下载手部模型」这一步，等多久都不会动。现在这些文件随站点一起发布，
+   和页面同一个域、同一条连接，不会再被拦。 */
 modelBtn.addEventListener('click', async () => {
   if (!camOk) return;
   modelBtn.disabled = true;
   modelRows.innerHTML = '';
-  const line = row(modelRows, '状态', '正在下载运行库…', { cls: 't-idle', text: '等待' });
+  const line = row(modelRows, '状态', '正在加载运行库…', { cls: 't-idle', text: '等待' });
 
   let landmarker = null;
   const t0 = performance.now();
 
   try {
-    const vision = await import(
-      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@' + VISION_VER + '/+esm'
-    );
-    state(line, '运行库已就绪，正在下载手部模型（约 7.8MB）…');
+    const vision = await import(BUNDLE_URL);
+    state(line, '运行库已就绪，正在读取手部模型（7.5MB，同源）…');
 
-    const fileset = await vision.FilesetResolver.forVisionTasks(
-      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@' + VISION_VER + '/wasm',
-    );
+    const fileset = await vision.FilesetResolver.forVisionTasks(WASM_DIR);
 
-    landmarker = await vision.HandLandmarker.createFromOptions(fileset, {
-      baseOptions: { modelAssetPath: MODEL_URL, delegate: 'GPU' },
-      runningMode: 'VIDEO',
-      numHands: 1,
-    });
+    landmarker = await Promise.race([
+      vision.HandLandmarker.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: MODEL_URL, delegate: 'GPU' },
+        runningMode: 'VIDEO',
+        numHands: 1,
+      }),
+      new Promise((_, reject) =>
+        setTimeout(
+          () =>
+            reject(
+              new Error('读取超时（90 秒）。文件就在本站，正常几秒就完 —— 超时说明文件没部署上去，或者路径不对。'),
+            ),
+          90000,
+        ),
+      ),
+    ]);
 
     const loadMs = Math.round(performance.now() - t0);
     line.remove();
@@ -489,7 +505,7 @@ modelBtn.addEventListener('click', async () => {
     row(
       modelRows,
       '常见解释',
-      '<small>如果是超时或网络错误：模型托管在 Google 存储，国内直连通常不通，需要自托管。<br>如果是 delegate 相关：这台设备的 WebGL 撑不起 GPU 推理。</small>',
+      '<small>超时：模型和 wasm 现在都在本站，正常几秒就读完了。如果还超时，说明这次部署没把 public/models 和 public/mediapipe 带上去。<br>delegate 相关：这台设备的 WebGL 撑不起 GPU 推理，可以改成 CPU 再试。</small>',
     );
     reportLine('模型加载', '失败 ' + msg.slice(0, 80));
     modelBtn.disabled = false;
@@ -549,6 +565,17 @@ function measureFps(landmarker) {
 const gyroRows = $('gyroRows');
 const gyroBtn = $('gyroBtn');
 let gyroOk = null;
+
+/* 桌面设备没有陀螺仪，这一节直接标注跳过。
+   这里要提前说明，否则用户在电脑上看到「没收到任何事件」会以为坏了。 */
+if (isDesktop) {
+  const sec = gyroBtn.closest('.card');
+  const hint = sec && sec.querySelector('.hint');
+  if (hint) hint.textContent = '电脑没有陀螺仪，这一节跳过就行。电脑走的是摄像头那条路，而且比手机更顺。';
+  gyroBtn.hidden = true;
+  row(gyroRows, '陀螺仪', '电脑不需要这一节', { cls: 't-idle', text: '跳过' });
+  reportLine('陀螺仪', '桌面设备跳过');
+}
 
 gyroBtn.addEventListener('click', async () => {
   gyroBtn.disabled = true;
@@ -622,10 +649,21 @@ function updateVerdict() {
 
   if (camOk) {
     card.hidden = false;
+    const fpsNote = isDesktop
+      ? '电脑是跑 MediaPipe 最理想的环境：没有壳挡权限，性能和分辨率都是手机比不了的，帧率通常是手机的两三倍。'
+      : '接着看第三节的帧率：22 帧以上手势会很顺，12 到 22 帧能用但要放慢动作，12 帧以下只做最简单的挥手。';
+    const tail = isDesktop
+      ? '鼠标那套操作会一起做——悬停、拖拽、滚轮翻信，不必只靠手势。'
+      : '手机上还能再叠一层陀螺仪，作为暗光、背光时手势失灵的备选。';
+    text.innerHTML = '<span class="big">摄像头这条路能走</span>' + fpsNote + '<br><br>' + tail;
+    return;
+  }
+
+  if (isDesktop) {
+    card.hidden = false;
     text.innerHTML =
-      '<span class="big">摄像头这条路能走</span>' +
-      '基础条件都通过了。接着看第三节的帧率：22 帧以上手势会很顺，12 到 22 帧能用但要放慢动作，12 帧以下建议只做最简单的挥手。<br><br>' +
-      '只要帧率不是"卡顿"，就可以按计划做媒体手势。';
+      '<span class="big">这台电脑没有可用的摄像头</span>' +
+      '不影响任何功能。电脑上本来就有鼠标那条路：悬停、拖拽、滚轮翻信，和手势共用同一套状态机。手势只是锦上添花，没有也能完整使用。';
     return;
   }
 
